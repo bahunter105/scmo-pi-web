@@ -18,6 +18,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { AppUpdateResponse } from "@/lib/api-types";
 import type { ToolEntry } from "@/lib/tool-presets";
+import { isScmoProductMode, scmoLogoPath, scmoProductLabel } from "@/lib/scmo-product-mode";
 import {
   captureScrollDistance,
   getPromptAnchorSpacerHeight,
@@ -703,9 +704,27 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                 fontFamily: "var(--font-mono)",
               }}
             >
-              <div style={{ display: "flex", alignItems: "baseline", gap: isMobile ? 7 : 10, minWidth: 0, flex: 1, lineHeight: 1.4, overflow: "hidden" }}>
-                <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: 0, color: "var(--text)", flexShrink: 0, whiteSpace: "nowrap" }}>π</span>
-                <span style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, letterSpacing: 0, flexShrink: 0, whiteSpace: "nowrap" }}>Pi Web</span>
+              <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 7 : 10, minWidth: 0, flex: 1, lineHeight: 1.4, overflow: "hidden" }}>
+                {isScmoProductMode ? (
+                  <div
+                    aria-label="SimplicityCMO"
+                    role="img"
+                    style={{
+                      height: isMobile ? 26 : 32,
+                      width: isMobile ? 138 : 170,
+                      backgroundImage: `url(${scmoLogoPath})`,
+                      backgroundPosition: "left center",
+                      backgroundRepeat: "no-repeat",
+                      backgroundSize: "contain",
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: 0, color: "var(--text)", flexShrink: 0, whiteSpace: "nowrap" }}>π</span>
+                )}
+                <span style={{ fontSize: isScmoProductMode ? 16 : 22, color: "var(--text)", fontWeight: 700, letterSpacing: 0, flexShrink: 0, whiteSpace: "nowrap" }}>
+                  {isScmoProductMode ? scmoProductLabel : "Pi Web"}
+                </span>
                 <NewSessionUpdateLink label={(version) => t("appUpdate.releaseNotes", { version })} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>

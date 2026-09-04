@@ -1,11 +1,12 @@
 import type { MetadataRoute } from "next";
+import { isScmoProductMode, scmoFaviconUrl, scmoProductLabel, scmoProductName } from "@/lib/scmo-product-mode";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Pi Web",
-    short_name: "Pi Web",
-    description: "Local web interface for the pi coding agent",
+    name: isScmoProductMode ? scmoProductName : "Pi Web",
+    short_name: isScmoProductMode ? scmoProductLabel : "Pi Web",
+    description: isScmoProductMode ? "SimplicityCMO product-mode interface" : "Local web interface for the pi coding agent",
     start_url: "/",
     scope: "/",
     display: "standalone",
@@ -15,14 +16,14 @@ export default function manifest(): MetadataRoute.Manifest {
     lang: "en",
     icons: [
       {
-        src: "/icons/icon-192.png",
-        sizes: "192x192",
+        src: isScmoProductMode ? scmoFaviconUrl : "/icons/icon-192.png",
+        sizes: isScmoProductMode ? "150x150" : "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/icon-512.png",
-        sizes: "512x512",
+        src: isScmoProductMode ? scmoFaviconUrl : "/icons/icon-512.png",
+        sizes: isScmoProductMode ? "150x150" : "512x512",
         type: "image/png",
         purpose: "any",
       },

@@ -5,6 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useTheme, type ThemePreference } from "@/hooks/useTheme";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
+import { isScmoProductMode } from "@/lib/scmo-product-mode";
 import {
   setLastSettingsSection,
   type SettingsSection,
@@ -146,31 +147,33 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
         </section>
       )}
 
-      <section className="settings-general-section">
-        <h3 className="settings-general-heading">{t("common.language")}</h3>
-        <p className="settings-general-description">{t("settings.languageDescription")}</p>
-        <div role="radiogroup" aria-label={t("common.language")} className="settings-language-options">
-          {supportedLocales.map((plugin) => {
-            const selected = locale === plugin.id;
-            return (
-              <button
-                key={plugin.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setLocale(plugin.id as typeof locale)}
-                className="settings-language-option"
-              >
-                <span className="settings-language-radio">
-                  {selected && <span className="settings-language-radio-dot" />}
-                </span>
-                <span className="settings-language-label">{plugin.label}</span>
-                <span className="settings-language-code">{plugin.id}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      {!isScmoProductMode && (
+        <section className="settings-general-section">
+          <h3 className="settings-general-heading">{t("common.language")}</h3>
+          <p className="settings-general-description">{t("settings.languageDescription")}</p>
+          <div role="radiogroup" aria-label={t("common.language")} className="settings-language-options">
+            {supportedLocales.map((plugin) => {
+              const selected = locale === plugin.id;
+              return (
+                <button
+                  key={plugin.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setLocale(plugin.id as typeof locale)}
+                  className="settings-language-option"
+                >
+                  <span className="settings-language-radio">
+                    {selected && <span className="settings-language-radio-dot" />}
+                  </span>
+                  <span className="settings-language-label">{plugin.label}</span>
+                  <span className="settings-language-code">{plugin.id}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

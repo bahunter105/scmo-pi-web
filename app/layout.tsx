@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
 import { PwaRegistration } from "@/components/PwaRegistration";
+import { isScmoProductMode, scmoFaviconUrl, scmoProductLabel, scmoProductName } from "@/lib/scmo-product-mode";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import "./settings.css";
@@ -12,22 +13,22 @@ const notoSansMono = Noto_Sans_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pi Web",
-  description: "Pi Web interface for the pi coding agent",
-  applicationName: "Pi Web",
+  title: isScmoProductMode ? scmoProductLabel : "Pi Web",
+  description: isScmoProductMode ? "SimplicityCMO product-mode interface" : "Pi Web interface for the pi coding agent",
+  applicationName: isScmoProductMode ? scmoProductName : "Pi Web",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
       {
-        url: "/icons/icon-192.png",
-        sizes: "192x192",
+        url: isScmoProductMode ? scmoFaviconUrl : "/icons/icon-192.png",
+        sizes: isScmoProductMode ? "150x150" : "192x192",
         type: "image/png",
       },
     ],
     apple: [
       {
-        url: "/icons/apple-touch-icon.png",
-        sizes: "180x180",
+        url: isScmoProductMode ? scmoFaviconUrl : "/icons/apple-touch-icon.png",
+        sizes: isScmoProductMode ? "150x150" : "180x180",
         type: "image/png",
       },
     ],
@@ -35,7 +36,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Pi Web",
+    title: isScmoProductMode ? scmoProductName : "Pi Web",
   },
   formatDetection: {
     telephone: false,
