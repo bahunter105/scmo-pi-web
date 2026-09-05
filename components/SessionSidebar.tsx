@@ -9,7 +9,7 @@ import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
-import { isScmoProductMode, scmoProductLabel } from "@/lib/scmo-product-mode";
+import { isScmoProductMode, scmoLogoPath } from "@/lib/scmo-product-mode";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
@@ -316,7 +316,7 @@ function PiWebTitle() {
 
   const target = showVersion
     ? `${process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}p${process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}`
-    : isScmoProductMode ? scmoProductLabel : "Pi Web";
+    : "Pi Web";
   const display = useScramble(target, scrambling);
 
   const triggerScramble = useCallback((toVersion: boolean) => {
@@ -337,6 +337,24 @@ function PiWebTitle() {
   }, [showVersion, triggerScramble]);
 
   useEffect(() => () => { if (revertTimerRef.current) clearTimeout(revertTimerRef.current); }, []);
+
+  if (isScmoProductMode) {
+    return (
+      <div
+        aria-label="SimplicityCMO"
+        role="img"
+        style={{
+          height: 24,
+          width: 120,
+          backgroundImage: `url(${scmoLogoPath})`,
+          backgroundPosition: "left center",
+          backgroundRepeat: "no-repeat",
+          backgroundSize: "contain",
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
 
   return (
     <button

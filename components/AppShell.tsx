@@ -55,7 +55,7 @@ import type { FileViewerState } from "@/lib/file-viewer-state";
 import type { ToolEntry } from "@/lib/tool-presets";
 import { getSessionFamily } from "@/lib/session-family";
 import { getLastSettingsSection, type SettingsSection } from "@/lib/settings-navigation";
-import { isScmoProductMode, scmoDefaultModel, scmoDefaultProvider, scmoLogoPath, scmoProductLabel } from "@/lib/scmo-product-mode";
+import { isScmoProductMode, scmoProductLabel } from "@/lib/scmo-product-mode";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -1873,38 +1873,6 @@ export function AppShell() {
               </svg>
             )}
           </button>
-          {isScmoProductMode && !isMobile && (
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              height: "100%",
-              padding: "0 14px",
-              borderRight: "1px solid var(--border)",
-              minWidth: 0,
-              flexShrink: 0,
-            }}>
-              <div
-                aria-label="SimplicityCMO"
-                role="img"
-                style={{
-                  height: 22,
-                  width: 118,
-                  backgroundImage: `url(${scmoLogoPath})`,
-                  backgroundPosition: "left center",
-                  backgroundRepeat: "no-repeat",
-                  backgroundSize: "contain",
-                  flexShrink: 0,
-                }}
-              />
-              <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1, minWidth: 0 }}>
-                <span style={{ color: "var(--text)", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{scmoProductLabel}</span>
-                <span style={{ color: "var(--text-dim)", fontSize: 10, whiteSpace: "nowrap" }}>
-                  {scmoDefaultProvider} / {scmoDefaultModel}
-                </span>
-              </div>
-            </div>
-          )}
           {isMobile && (
             <div
               ref={mobileToolbarRef}
