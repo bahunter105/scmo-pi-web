@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
+import { getScmoDefaultThinkingLevel, getScmoDefaultToolNames, getScmoInitialModel } from "@/lib/scmo-runtime-defaults";
 
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -55,10 +56,15 @@ export async function POST(req: Request) {
     // that share a key onto one session. Date.now() (ms resolution) collides for
     // requests in the same millisecond, merging two new sessions into one.
     const tempKey = `__new__${randomUUID()}`;
+    const scmoInitialModel = getScmoInitialModel();
     const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, {
-      ...(toolNames ? { toolNames } : {}),
-      ...(provider && modelId ? { initialModel: { provider, modelId } } : {}),
-      ...(explicitThinkingLevel ? { thinkingLevel: explicitThinkingLevel } : {}),
+      ...(toolNames ? { toolNames } : getScmoDefaultToolNames() ? { toolNames: getScmoDefaultToolNames() } : {}),
+      ...(provider && modelId
+        ? { initialModel: { provider, modelId } }
+        : scmoInitialModel
+          ? { initialModel: scmoInitialModel, allowInitialModelFallback: true }
+          : {}),
+      ...(explicitThinkingLevel ? { thinkingLevel: explicitThinkingLevel } : getScmoDefaultThinkingLevel() ? { thinkingLevel: getScmoDefaultThinkingLevel() } : {}),
     });
 
     // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)

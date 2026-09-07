@@ -19,6 +19,14 @@ Use both flags while testing because server metadata and client components read 
 SCMO_PRODUCT_MODE=1 NEXT_PUBLIC_SCMO_PRODUCT_MODE=1 npm run dev
 ```
 
+Optional overrides:
+
+```bash
+SCMO_DEFAULT_PROVIDER=openai-codex
+SCMO_DEFAULT_MODEL=gpt-5.4-mini
+PI_CODING_AGENT_DIR=/home/agent/.pi/agent
+```
+
 ## Current SCMO changes
 
 Keep changes small and upstream-syncable:
@@ -30,6 +38,9 @@ Keep changes small and upstream-syncable:
 - Language selector hidden when product mode is enabled.
 - Cost display hidden when product mode is enabled.
 - Token display remains visible for internal debugging.
+- Harness-owned Simmi system prompt in `lib/scmo-system-prompt.ts`.
+- Product-mode runtime defaults in `lib/scmo-runtime-defaults.ts`.
+- Codex/sandbox auth notes in `SCMO_AUTH.md`.
 
 ## Explicit non-goals for Demo 3
 
@@ -39,6 +50,7 @@ Keep changes small and upstream-syncable:
 - No internet hosting.
 - No removal of system prompt/history/debug affordances yet.
 - No provider credentials in repo.
+- No required `AGENTS.md` inside company workspaces after Demo 3B verification.
 
 ## Upstream sync
 
