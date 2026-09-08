@@ -26,6 +26,7 @@ import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
 import type { ToolPreset } from "@/lib/tool-presets";
+import { isScmoProductMode } from "@/lib/scmo-product-mode";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 
 export { filterModelOptions } from "./ModelSelector";
@@ -100,6 +101,9 @@ const TOOL_PRESET_MAP: Record<ToolPresetLabel, ToolPreset> = {
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
 const TEXT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const ANCHORED_MENU_GAP = 8;
+const SCMO_VOICE_INTAKE_PROMPT = "I recorded a company narrative for SCMO Company Intake. Demo 4A does not transcribe audio yet. I will paste the reviewed transcript below. Please extract candidate company facts, confidence, gaps, and ask one decision-grade follow-up question.\n\nTranscript:\n";
+
+type ScmoVoiceCaptureState = "idle" | "requesting" | "recording" | "captured" | "error";
 
 export function getUpwardMenuMaxHeight(menuBottom: number, visibleTop: number, gap = ANCHORED_MENU_GAP): number {
   return Math.max(0, Math.floor(menuBottom - visibleTop - gap));
@@ -483,6 +487,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scmoMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const scmoVoiceChunksRef = useRef<BlobPart[]>([]);
+  const scmoVoiceStreamRef = useRef<MediaStream | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -496,6 +503,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
   const pendingImageCountRef = useRef(0);
+  const [scmoVoiceState, setScmoVoiceState] = useState<ScmoVoiceCaptureState>("idle");
+  const [scmoVoicePreviewUrl, setScmoVoicePreviewUrl] = useState<string | null>(null);
+  const [scmoVoiceMimeType, setScmoVoiceMimeType] = useState<string | null>(null);
+  const [scmoVoiceError, setScmoVoiceError] = useState<string | null>(null);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
 
@@ -785,6 +796,123 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return () => {
       attachedImagesRef.current.forEach(revokeImagePreview);
     };
+  }, []);
+
+  const stopScmoVoiceStream = useCallback(() => {
+    scmoVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    scmoVoiceStreamRef.current = null;
+  }, []);
+
+  const clearScmoVoiceCapture = useCallback(() => {
+    if (scmoMediaRecorderRef.current?.state === "recording") {
+      scmoMediaRecorderRef.current.stop();
+    }
+    scmoMediaRecorderRef.current = null;
+    scmoVoiceChunksRef.current = [];
+    stopScmoVoiceStream();
+    setScmoVoiceState("idle");
+    setScmoVoiceError(null);
+    setScmoVoiceMimeType(null);
+    setScmoVoicePreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }, [stopScmoVoiceStream]);
+
+  useEffect(() => clearScmoVoiceCapture, [clearScmoVoiceCapture]);
+
+  const startScmoVoiceCapture = useCallback(async () => {
+    if (!isScmoProductMode || isStreaming || scmoVoiceState === "recording" || scmoVoiceState === "requesting") return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setScmoVoiceState("error");
+      setScmoVoiceError("This browser does not support local mic recording. Use the text intake path for now.");
+      return;
+    }
+
+    setScmoVoiceState("requesting");
+    setScmoVoiceError(null);
+    setScmoVoicePreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+    setScmoVoiceMimeType(null);
+    scmoVoiceChunksRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredMimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
+
+      scmoVoiceStreamRef.current = stream;
+      scmoMediaRecorderRef.current = recorder;
+      setScmoVoiceMimeType(recorder.mimeType || preferredMimeType || "audio/webm");
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) scmoVoiceChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        stopScmoVoiceStream();
+        setScmoVoiceState("error");
+        setScmoVoiceError("Recording failed. Use the text intake path and try mic capture again later.");
+      };
+      recorder.onstop = () => {
+        stopScmoVoiceStream();
+        const mimeType = recorder.mimeType || preferredMimeType || "audio/webm";
+        const blob = new Blob(scmoVoiceChunksRef.current, { type: mimeType });
+        scmoMediaRecorderRef.current = null;
+        scmoVoiceChunksRef.current = [];
+        if (!blob.size) {
+          setScmoVoiceState("error");
+          setScmoVoiceError("No audio was captured. Try recording again or use text intake.");
+          return;
+        }
+        const nextUrl = URL.createObjectURL(blob);
+        setScmoVoicePreviewUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return nextUrl;
+        });
+        setScmoVoiceMimeType(mimeType);
+        setScmoVoiceState("captured");
+      };
+
+      recorder.start();
+      setScmoVoiceState("recording");
+    } catch (error) {
+      stopScmoVoiceStream();
+      setScmoVoiceState("error");
+      setScmoVoiceError(error instanceof DOMException && error.name === "NotAllowedError"
+        ? "Microphone permission was blocked. Enable mic access or continue with text intake."
+        : "Could not start microphone capture. Continue with text intake and retry later.");
+    }
+  }, [isStreaming, scmoVoiceState, stopScmoVoiceStream]);
+
+  const stopScmoVoiceCapture = useCallback(() => {
+    if (scmoMediaRecorderRef.current?.state === "recording") {
+      scmoMediaRecorderRef.current.stop();
+      return;
+    }
+    stopScmoVoiceStream();
+    setScmoVoiceState("idle");
+  }, [stopScmoVoiceStream]);
+
+  const insertScmoVoiceTranscriptPrompt = useCallback(() => {
+    const current = valueRef.current;
+    const nextValue = current.trim()
+      ? `${current}\n\n${SCMO_VOICE_INTAKE_PROMPT}`
+      : SCMO_VOICE_INTAKE_PROMPT;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(nextValue.length, nextValue.length);
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
   }, []);
 
   const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
@@ -1905,6 +2033,85 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </div>
             );
           })()}
+          {isScmoProductMode && scmoVoiceState !== "idle" && (
+            <div
+              role={scmoVoiceState === "error" ? "alert" : "status"}
+              style={{
+                marginBottom: 8,
+                padding: "10px 12px",
+                border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border))",
+                borderRadius: 12,
+                background: "color-mix(in srgb, var(--accent) 7%, var(--bg))",
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ display: "grid", gap: 2 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                    <span aria-hidden="true">🎙️</span>
+                    <span>
+                      {scmoVoiceState === "requesting" && "Requesting microphone access"}
+                      {scmoVoiceState === "recording" && "Recording company narrative"}
+                      {scmoVoiceState === "captured" && "Audio captured for Demo 4A"}
+                      {scmoVoiceState === "error" && "Voice capture needs attention"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                    {scmoVoiceState === "captured"
+                      ? "Transcript generation is Demo 4B. For now, review the clip and paste/edit the transcript before sending it to Simmi."
+                      : scmoVoiceError ?? "Recording stays local in the browser for this UI proof. No STT provider is called in Demo 4A."}
+                  </div>
+                </div>
+                {scmoVoiceState === "recording" && (
+                  <span style={{ flexShrink: 0, width: 9, height: 9, borderRadius: 99, background: "#ef4444", boxShadow: "0 0 0 4px rgba(239,68,68,0.16)" }} />
+                )}
+              </div>
+              {scmoVoicePreviewUrl && (
+                <audio controls src={scmoVoicePreviewUrl} style={{ width: "100%" }}>
+                  {scmoVoiceMimeType ? <source src={scmoVoicePreviewUrl} type={scmoVoiceMimeType} /> : null}
+                </audio>
+              )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {scmoVoiceState === "captured" && (
+                  <button
+                    type="button"
+                    onClick={insertScmoVoiceTranscriptPrompt}
+                    style={{
+                      padding: "6px 10px",
+                      border: "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))",
+                      borderRadius: 8,
+                      background: "var(--accent)",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Prepare transcript handoff
+                  </button>
+                )}
+                {(scmoVoiceState === "captured" || scmoVoiceState === "error") && (
+                  <button
+                    type="button"
+                    onClick={clearScmoVoiceCapture}
+                    style={{
+                      padding: "6px 10px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "none",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Clear recording
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           <div
             style={{
               minWidth: 0,
@@ -2070,6 +2277,48 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
           {/* LEFT: attach + model selector (idle) or steer/followup toggle (streaming) */}
           <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2 }}>
+            {isScmoProductMode && (
+              <button
+                type="button"
+                onClick={scmoVoiceState === "recording" ? stopScmoVoiceCapture : startScmoVoiceCapture}
+                disabled={isStreaming || scmoVoiceState === "requesting"}
+                title={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : "Record SCMO voice intake narrative"}
+                aria-label={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : "Record SCMO voice intake narrative"}
+                aria-pressed={scmoVoiceState === "recording"}
+                style={{
+                  flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 32, height: 32, padding: 0,
+                  background: scmoVoiceState === "recording" ? "rgba(239,68,68,0.10)" : "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: scmoVoiceState === "recording" ? "#ef4444" : scmoVoicePreviewUrl ? "var(--accent)" : "var(--text-muted)",
+                  cursor: isStreaming || scmoVoiceState === "requesting" ? "not-allowed" : "pointer",
+                  opacity: isStreaming || scmoVoiceState === "requesting" ? 0.55 : 1,
+                  transition: "background 0.12s, color 0.12s, opacity 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (isStreaming || scmoVoiceState === "requesting") return;
+                  e.currentTarget.style.background = scmoVoiceState === "recording" ? "rgba(239,68,68,0.16)" : "var(--bg-hover)";
+                  e.currentTarget.style.color = scmoVoiceState === "recording" ? "#ef4444" : "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = scmoVoiceState === "recording" ? "rgba(239,68,68,0.10)" : "none";
+                  e.currentTarget.style.color = scmoVoiceState === "recording" ? "#ef4444" : scmoVoicePreviewUrl ? "var(--accent)" : "var(--text-muted)";
+                }}
+              >
+                {scmoVoiceState === "recording" ? (
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7" rx="1.5" fill="currentColor" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="22" />
+                  </svg>
+                )}
+              </button>
+            )}
             <button
               onClick={() => fileInputRef.current?.click()}
              title={t("chat.attachImage")}
