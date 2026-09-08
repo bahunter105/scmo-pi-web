@@ -1,3 +1,16 @@
+function findExistingAncestorPath(target: string): string {
+  let current = target;
+  while (current && current !== path.dirname(current)) {
+    try {
+      if (fs.existsSync(current)) return current;
+    } catch {
+      // ignore
+    }
+    current = path.dirname(current);
+  }
+  return current;
+}
+
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
@@ -267,17 +280,19 @@ export async function PUT(
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    let stat: fs.Stats;
+    let stat: fs.Stats | undefined;
     try {
       stat = fs.statSync(filePath);
     } catch {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      // File does not exist yet; verify parent directory authorization
+      stat = undefined;
     }
 
-    if (!stat.isFile()) {
+    if (stat && !stat.isFile()) {
       return NextResponse.json({ error: "Not a file" }, { status: 400 });
     }
-    if (!isExistingFilePathAllowed(filePath, allowedRoots)) {
+    const authorizationPath = findExistingAncestorPath(stat ? filePath : path.dirname(filePath));
+    if (!isExistingFilePathAllowed(authorizationPath, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
     if (!isTextSavePath(filePath)) {
@@ -293,6 +308,7 @@ export async function PUT(
       return NextResponse.json({ error: "File too large to save (>256KB)" }, { status: 413 });
     }
 
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, body.content, "utf8");
     return NextResponse.json({ ok: true, size: bytes });
   } catch (error) {

@@ -954,6 +954,20 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return true;
   }, [attachedImages.length, clearInput, onBuiltinCommand]);
 
+  
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent<{ prompt?: string }>;
+      const prompt = customEvent.detail?.prompt?.trim();
+      if (prompt) {
+        onAudioUnlock?.();
+        onSend(prompt);
+      }
+    };
+    window.addEventListener("scmo:send-prompt", handler);
+    return () => window.removeEventListener("scmo:send-prompt", handler);
+  }, [onSend, onAudioUnlock]);
+
   const handleSend = useCallback(async () => {
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;

@@ -934,7 +934,12 @@ function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent
 function resolveScmoProposalPath(filePath: string, cwd?: string): string {
   const normalized = normalizeFilePathSlashes(filePath);
   if (normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized)) return normalized;
-  return cwd ? joinFilePath(cwd, normalized) : normalized;
+  if (!cwd) return normalized;
+  // If cwd is the parent companies directory, resolve inside scmo-internal-demo if present
+  if (cwd.endsWith("/companies") && !normalized.startsWith("scmo-internal-demo/")) {
+    return joinFilePath(cwd, `scmo-internal-demo/${normalized}`);
+  }
+  return joinFilePath(cwd, normalized);
 }
 
 function getRiskColor(risk: ScmoFileChangeRisk): string {
@@ -946,6 +951,8 @@ function getRiskColor(risk: ScmoFileChangeRisk): string {
 function ScmoFileChangeApprovalCard({ proposal, cwd, onOpenFile }: { proposal: ScmoFileChangeProposal; cwd?: string; onOpenFile?: (filePath: string) => void }) {
   const [status, setStatus] = useState<"pending" | "saving" | "approved" | "rejected" | "changes" | "other" | "error">("pending");
   const [message, setMessage] = useState<string | null>(null);
+  const [isRequestingChanges, setIsRequestingChanges] = useState(false);
+  const [changeNotes, setChangeNotes] = useState("");
   const targetPath = resolveScmoProposalPath(proposal.filePath, cwd);
   const riskColor = getRiskColor(proposal.risk);
 
@@ -971,18 +978,26 @@ function ScmoFileChangeApprovalCard({ proposal, cwd, onOpenFile }: { proposal: S
 
   const reject = () => {
     setStatus("rejected");
+    setIsRequestingChanges(false);
     setMessage("Rejected. No file was changed.");
   };
 
-  const requestChanges = () => {
-    const prompt = `Please revise the proposed change for ${proposal.filePath}. Keep it as a review card and explain what changed.`;
-    void copyText(prompt);
+  const submitChangeRequest = () => {
+    const notes = changeNotes.trim();
+    const prompt = notes
+      ? `Please revise the proposed change for ${proposal.filePath}.\n\nRequested changes:\n${notes}\n\nKeep the response as an SCMO file change approval card and explain what changed.`
+      : `Please revise the proposed change for ${proposal.filePath}. Keep it as an SCMO file change approval card and explain what changed.`;
     setStatus("changes");
-    setMessage("Request-change prompt copied. Paste it into chat with your notes.");
+    setIsRequestingChanges(false);
+    setMessage("Revision request submitted to Simmi.");
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("scmo:send-prompt", { detail: { prompt } }));
+    }
   };
 
   const other = () => {
     setStatus("other");
+    setIsRequestingChanges(false);
     setMessage("Use the side-panel editor or reply in chat with the exact alternate action.");
   };
 
@@ -1017,9 +1032,41 @@ function ScmoFileChangeApprovalCard({ proposal, cwd, onOpenFile }: { proposal: S
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button type="button" onClick={() => void approve()} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("primary")}>Approve</button>
         <button type="button" onClick={reject} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("secondary")}>Reject</button>
-        <button type="button" onClick={requestChanges} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("secondary")}>Request changes</button>
+        <button type="button" onClick={() => setIsRequestingChanges((prev) => !prev)} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle(isRequestingChanges ? "primary" : "secondary")}>Request changes</button>
         <button type="button" onClick={other} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("ghost")}>Other</button>
       </div>
+
+      {isRequestingChanges && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px", borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border)" }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)" }}>
+            What would you like revised in this file proposal?
+          </label>
+          <textarea
+            value={changeNotes}
+            onChange={(e) => setChangeNotes(e.target.value)}
+            placeholder="Type your notes or changes here (e.g. adjust tone, add missing points, keep existing YAML)..."
+            rows={3}
+            style={{
+              width: "100%",
+              padding: "8px",
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "var(--bg-panel)",
+              color: "var(--text)",
+              fontSize: 12,
+              lineHeight: 1.4,
+              resize: "vertical",
+              fontFamily: "inherit",
+              boxSizing: "border-box",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={submitChangeRequest} style={approvalButtonStyle("primary")}>Submit Revision</button>
+            <button type="button" onClick={() => setIsRequestingChanges(false)} style={approvalButtonStyle("ghost")}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {message && (
         <div style={{ color: status === "error" ? "#ef4444" : "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
           {message}
