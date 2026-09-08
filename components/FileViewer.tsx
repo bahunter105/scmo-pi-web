@@ -986,6 +986,10 @@ function TextFileViewer({
   const initialScrollLeft = initialState?.scrollLeft ?? 0;
   const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
   const [wrapLines, setWrapLines] = useState(initialWrapLines);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState("");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [watching, setWatching] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
@@ -1102,6 +1106,10 @@ function TextFileViewer({
     setData(null);
     setGitDiff(null);
     setGitDiffResolved(false);
+    setIsEditing(false);
+    setEditedContent("");
+    setSaveStatus("idle");
+    setSaveError(null);
     setWatching(false);
 
     fetchContent(filePath).finally(() => {
@@ -1222,6 +1230,42 @@ function TextFileViewer({
     );
   }, [cwd, filePath, onMentionLines]);
 
+  const saveEditedContent = useCallback(async () => {
+    if (!data || saveStatus === "saving") return;
+    setSaveStatus("saving");
+    setSaveError(null);
+    try {
+      const response = await fetch(getFileApiUrl(filePath, "read", sourceSessionId), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editedContent }),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string; size?: number };
+      if (!response.ok) throw new Error(body.error || `Failed to save file (HTTP ${response.status})`);
+      const nextData = { ...data, content: editedContent, size: body.size ?? new Blob([editedContent]).size };
+      setData(nextData);
+      setSaveStatus("saved");
+      setIsEditing(false);
+      await fetchGitDiff(filePath);
+      requestAnimationFrame(() => setSaveStatus("idle"));
+    } catch (nextError) {
+      setSaveStatus("error");
+      setSaveError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [data, editedContent, fetchGitDiff, filePath, saveStatus, sourceSessionId]);
+
+  const toggleEditMode = useCallback(() => {
+    if (isEditing) {
+      void saveEditedContent();
+      return;
+    }
+    updateDisplayMode("source");
+    setEditedContent(data?.content ?? "");
+    setSaveError(null);
+    setSaveStatus("idle");
+    setIsEditing(true);
+  }, [data?.content, isEditing, saveEditedContent, updateDisplayMode]);
+
   useEffect(() => {
     if (!onMentionLines || displayMode !== "source") return;
 
@@ -1303,6 +1347,15 @@ function TextFileViewer({
   const metadata = isDeletedDiff
     ? t("files.deleted")
     : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
+  const editStatusLabel = saveStatus === "saving"
+    ? "Saving..."
+    : isEditing && editedContent !== content
+    ? "Unsaved edits"
+    : isEditing
+    ? "Editing"
+    : saveStatus === "saved"
+    ? "Saved"
+    : null;
 
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1325,6 +1378,11 @@ function TextFileViewer({
         </span>
 
         <span className="file-viewer-meta" title={metadata}>{metadata}</span>
+        {editStatusLabel && (
+          <span style={{ color: saveStatus === "error" ? "#f87171" : "var(--text-muted)", fontWeight: 600 }}>
+            {editStatusLabel}
+          </span>
+        )}
         {!isDeletedDiff && (
           <span
             title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
@@ -1393,6 +1451,32 @@ function TextFileViewer({
               <>
                 <button
                   type="button"
+                  onClick={toggleEditMode}
+                  title={isEditing ? "Save file" : "Edit file"}
+                  aria-label={isEditing ? "Save file" : "Edit file"}
+                  aria-pressed={isEditing}
+                  disabled={saveStatus === "saving"}
+                  className="file-viewer-icon-button"
+                  style={{
+                    background: isEditing ? "var(--bg-selected)" : "transparent",
+                    color: isEditing ? "var(--text)" : "var(--text-muted)",
+                  }}
+                >
+                  {isEditing ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                      <path d="M17 21v-8H7v8" />
+                      <path d="M7 3v5h8" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  type="button"
                   onClick={toggleWrapLines}
                   title={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
                   aria-label={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
@@ -1428,8 +1512,38 @@ function TextFileViewer({
         }}
         style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}
       >
+        {saveError && (
+          <div style={{ padding: "6px 12px", borderBottom: "1px solid var(--border)", color: "#f87171", background: "var(--bg-panel)", fontSize: 12 }}>
+            {saveError}
+          </div>
+        )}
         {effectiveDisplayMode === "diff" && hasGitDiff ? (
           <DiffView patch={gitDiff.patch!} />
+        ) : isEditing ? (
+          <textarea
+            value={editedContent}
+            onChange={(event) => {
+              setEditedContent(event.target.value);
+              setSaveStatus("idle");
+              setSaveError(null);
+            }}
+            spellCheck={false}
+            autoFocus
+            style={{
+              boxSizing: "border-box",
+              width: "100%",
+              minHeight: "100%",
+              border: 0,
+              outline: "none",
+              resize: "none",
+              padding: "12px 16px",
+              background: "var(--bg)",
+              color: "var(--text)",
+              ...FILE_CODE_STYLE,
+              whiteSpace: wrapLines ? "pre-wrap" : "pre",
+              overflowWrap: wrapLines ? "anywhere" : "normal",
+            }}
+          />
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
             srcDoc={content}

@@ -20,7 +20,7 @@ import {
 } from "@/lib/file-types";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
-import { isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   inspectUploadTargets,
   parseUploadConflictStrategy,
@@ -42,6 +42,7 @@ type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024;
+const MAX_TEXT_SAVE_BYTES = TEXT_PREVIEW_MAX_BYTES;
 // Multipart boundaries and headers are not file bytes, but must be bounded too.
 const MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_TOTAL_BYTES + 1024 * 1024;
 
@@ -68,6 +69,10 @@ function getLanguage(filePath: string): string {
   if (base === "makefile" || base === "gnumakefile") return "makefile";
   const ext = base.split(".").pop() ?? "";
   return EXT_TO_LANGUAGE[ext] ?? "text";
+}
+
+function isTextSavePath(filePath: string): boolean {
+  return !getImageMime(filePath) && !getAudioMime(filePath) && !getDocumentMime(filePath);
 }
 
 function filePathFromSegments(segments: string[]): string {
@@ -237,6 +242,59 @@ export async function POST(
       { uploaded, skipped, errors },
       { status: errors.length > 0 ? 207 : 200 },
     );
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+
+  if (!hasJsonContentType(request)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
+  try {
+    const { path: segments } = await params;
+    const filePath = filePathFromSegments(segments);
+    const allowedRoots = await getAllowedFileRoots();
+    if (!isFilePathAllowed(filePath, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    if (!stat.isFile()) {
+      return NextResponse.json({ error: "Not a file" }, { status: 400 });
+    }
+    if (!isExistingFilePathAllowed(filePath, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    if (!isTextSavePath(filePath)) {
+      return NextResponse.json({ error: "Only text files can be edited" }, { status: 415 });
+    }
+
+    const body = await request.json().catch(() => null) as { content?: unknown } | null;
+    if (!body || typeof body.content !== "string") {
+      return NextResponse.json({ error: "content must be a string" }, { status: 400 });
+    }
+    const bytes = Buffer.byteLength(body.content, "utf8");
+    if (bytes > MAX_TEXT_SAVE_BYTES) {
+      return NextResponse.json({ error: "File too large to save (>256KB)" }, { status: 413 });
+    }
+
+    fs.writeFileSync(filePath, body.content, "utf8");
+    return NextResponse.json({ ok: true, size: bytes });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

@@ -59,6 +59,20 @@ test("TextFileViewer keeps first-mount preview eligibility across Strict Effects
   assert.match(block, /defaultPreviewEligibleRef\.current[\s\S]*updateDisplayMode\("preview"\)/);
 });
 
+test("TextFileViewer exposes an explicit edit/save control beside source wrapping", () => {
+  const block = functionBlock("TextFileViewer", null);
+  const wrapControl = block.indexOf("onClick={toggleWrapLines}");
+  const editControl = block.indexOf("onClick={toggleEditMode}");
+  const sourceModeButton = block.indexOf("DISPLAY_MODE_LABELS[mode]");
+
+  assert.ok(wrapControl >= 0, "wrap control missing");
+  assert.ok(editControl > sourceModeButton, "edit/save control should render after the Source mode label");
+  assert.ok(editControl < wrapControl, "edit/save control should render between Source and wrap control");
+  assert.match(block, /aria-label=\{isEditing \? "Save file" : "Edit file"\}/);
+  assert.match(block, /setEditedContent/);
+  assert.match(block, /saveEditedContent/);
+});
+
 test("markdown table tokens stay inline despite Tailwind's table utility", () => {
   const html = renderToStaticMarkup(
     React.createElement(
