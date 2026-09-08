@@ -5,7 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useTheme, type ThemePreference } from "@/hooks/useTheme";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
-import { isScmoProductMode } from "@/lib/scmo-product-mode";
+import { isScmoProductMode, scmoProductName } from "@/lib/scmo-product-mode";
 import {
   setLastSettingsSection,
   type SettingsSection,
@@ -41,6 +41,7 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   if (section === "models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
+  if (section === "scmo") return <svg {...common}><path d="M12 3 4 7v6c0 4.5 3.4 7.4 8 8 4.6-.6 8-3.5 8-8V7l-8-4Z" /><path d="M9 12.5 11 14.5 15.5 10" /></svg>;
   return <svg {...common}><path d="M9 7V2M15 7V2M6 13V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5a6 6 0 0 1-12 0ZM12 19v3" /></svg>;
 }
 
@@ -178,6 +179,79 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   );
 }
 
+function ScmoSettings({ cwd }: Pick<Props, "cwd">) {
+  const workspacePath = cwd ?? "No workspace selected";
+
+  return (
+    <div className="settings-general settings-scmo">
+      <h2 className="settings-general-title">SCMO</h2>
+      <p className="settings-general-description settings-scmo-intro">
+        Product settings for the assigned company workspace. These are safe placeholders for Demo 3C: visible enough to show direction, without enabling live admin or automation side effects.
+      </p>
+
+      <section className="settings-general-section settings-scmo-card">
+        <div className="settings-scmo-card-header">
+          <div>
+            <h3 className="settings-general-heading">Company Workspace</h3>
+            <p className="settings-general-description">This assisted-client session is assigned to one company workspace automatically.</p>
+          </div>
+          <span className="settings-scmo-badge is-ready">Connected</span>
+        </div>
+        <dl className="settings-scmo-details">
+          <div>
+            <dt>Company</dt>
+            <dd>{scmoProductName}</dd>
+          </div>
+          <div>
+            <dt>Workspace</dt>
+            <dd>{workspacePath}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="settings-general-section settings-scmo-card">
+        <div className="settings-scmo-card-header">
+          <div>
+            <h3 className="settings-general-heading">Scheduled Tasks</h3>
+            <p className="settings-general-description">Future home for scheduled work Simmi can draft and route through human review.</p>
+          </div>
+          <span className="settings-scmo-badge">Planned</span>
+        </div>
+        <div className="settings-scmo-placeholder-list">
+          <div>
+            <strong>Weekly context health check</strong>
+            <span>Draft automation only. No live scheduling in this demo.</span>
+          </div>
+          <div>
+            <strong>Follow-up question reminder</strong>
+            <span>Proposed by Simmi, reviewed by a human before activation.</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-general-section settings-scmo-card">
+        <div className="settings-scmo-card-header">
+          <div>
+            <h3 className="settings-general-heading">Admin + Users</h3>
+            <p className="settings-general-description">Future controls for company admins to manage users assigned to this workspace.</p>
+          </div>
+          <span className="settings-scmo-badge">Later</span>
+        </div>
+        <div className="settings-scmo-placeholder-list">
+          <div>
+            <strong>Company admin</strong>
+            <span>One workspace per company. Admin role and invite flow are deferred.</span>
+          </div>
+          <div>
+            <strong>Additional users</strong>
+            <span>Not available in assisted-client mode yet.</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessionReloaded }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -189,6 +263,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
     { id: "models", label: t("common.models"), requiresProject: false },
     { id: "skills", label: t("common.skills"), requiresProject: true },
     { id: "plugins", label: t("common.plugins"), requiresProject: true },
+    ...(isScmoProductMode ? [{ id: "scmo" as const, label: "SCMO", requiresProject: true }] : []),
   ];
 
   useEffect(() => setLastSettingsSection(initialSection), [initialSection]);
@@ -204,7 +279,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
   }, [onClose]);
 
   useEffect(() => {
-    if (cwd || (section !== "skills" && section !== "plugins")) return;
+    if (cwd || (section !== "skills" && section !== "plugins" && section !== "scmo")) return;
     setSection("general");
     setMountedSections((current) => new Set(current).add("general"));
     setLastSettingsSection("general");
@@ -277,6 +352,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
           {sectionHost("models", <ModelsConfig embedded onClose={onClose} />)}
           {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}
+          {cwd && sectionHost("scmo", <ScmoSettings cwd={cwd} />)}
         </main>
       </div>
     </div>
