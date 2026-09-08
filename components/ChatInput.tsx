@@ -101,9 +101,8 @@ const TOOL_PRESET_MAP: Record<ToolPresetLabel, ToolPreset> = {
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
 const TEXT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const ANCHORED_MENU_GAP = 8;
-const SCMO_VOICE_INTAKE_PROMPT = "I recorded a company narrative for SCMO Company Intake. Demo 4A does not transcribe audio yet. I will paste the reviewed transcript below. Please extract candidate company facts, confidence, gaps, and ask one decision-grade follow-up question.\n\nTranscript:\n";
 
-type ScmoVoiceCaptureState = "idle" | "requesting" | "recording" | "captured" | "error";
+type ScmoVoiceCaptureState = "idle" | "requesting" | "recording" | "transcribing" | "captured" | "error";
 
 export function getUpwardMenuMaxHeight(menuBottom: number, visibleTop: number, gap = ANCHORED_MENU_GAP): number {
   return Math.max(0, Math.floor(menuBottom - visibleTop - gap));
@@ -490,6 +489,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const scmoMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const scmoVoiceChunksRef = useRef<BlobPart[]>([]);
   const scmoVoiceStreamRef = useRef<MediaStream | null>(null);
+  const scmoVoiceBlobRef = useRef<Blob | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -809,6 +809,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     }
     scmoMediaRecorderRef.current = null;
     scmoVoiceChunksRef.current = [];
+    scmoVoiceBlobRef.current = null;
     stopScmoVoiceStream();
     setScmoVoiceState("idle");
     setScmoVoiceError(null);
@@ -821,8 +822,53 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   useEffect(() => clearScmoVoiceCapture, [clearScmoVoiceCapture]);
 
+  const insertScmoTranscript = useCallback((transcript: string) => {
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) return;
+    const current = valueRef.current;
+    const nextValue = current.trim()
+      ? `${current}\n\n${cleanTranscript}`
+      : cleanTranscript;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(nextValue.length, nextValue.length);
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, []);
+
+  const transcribeScmoVoiceCapture = useCallback(async (blob: Blob, mimeType: string) => {
+    setScmoVoiceState("transcribing");
+    setScmoVoiceError(null);
+    try {
+      const formData = new FormData();
+      const extension = mimeType.includes("mp4") ? "mp4" : mimeType.includes("wav") ? "wav" : "webm";
+      formData.set("audio", blob, `scmo-voice-intake.${extension}`);
+
+      const response = await fetch("/api/scmo/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json() as { transcript?: unknown; error?: unknown; detail?: unknown };
+      if (!response.ok) {
+        throw new Error(String(payload.error || payload.detail || `Transcription failed with HTTP ${response.status}`));
+      }
+      const transcript = typeof payload.transcript === "string" ? payload.transcript.trim() : "";
+      if (!transcript) throw new Error("Transcription returned an empty transcript");
+      insertScmoTranscript(transcript);
+      clearScmoVoiceCapture();
+    } catch (error) {
+      setScmoVoiceState("captured");
+      setScmoVoiceError(error instanceof Error ? error.message : String(error));
+    }
+  }, [clearScmoVoiceCapture, insertScmoTranscript]);
+
   const startScmoVoiceCapture = useCallback(async () => {
-    if (!isScmoProductMode || isStreaming || scmoVoiceState === "recording" || scmoVoiceState === "requesting") return;
+    if (!isScmoProductMode || isStreaming || scmoVoiceState === "recording" || scmoVoiceState === "requesting" || scmoVoiceState === "transcribing") return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setScmoVoiceState("error");
       setScmoVoiceError("This browser does not support local mic recording. Use the text intake path for now.");
@@ -837,6 +883,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
     setScmoVoiceMimeType(null);
     scmoVoiceChunksRef.current = [];
+    scmoVoiceBlobRef.current = null;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -869,13 +916,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           setScmoVoiceError("No audio was captured. Try recording again or use text intake.");
           return;
         }
+        scmoVoiceBlobRef.current = blob;
         const nextUrl = URL.createObjectURL(blob);
         setScmoVoicePreviewUrl((current) => {
           if (current) URL.revokeObjectURL(current);
           return nextUrl;
         });
         setScmoVoiceMimeType(mimeType);
-        setScmoVoiceState("captured");
+        void transcribeScmoVoiceCapture(blob, mimeType);
       };
 
       recorder.start();
@@ -887,7 +935,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         ? "Microphone permission was blocked. Enable mic access or continue with text intake."
         : "Could not start microphone capture. Continue with text intake and retry later.");
     }
-  }, [isStreaming, scmoVoiceState, stopScmoVoiceStream]);
+  }, [isStreaming, scmoVoiceState, stopScmoVoiceStream, transcribeScmoVoiceCapture]);
 
   const stopScmoVoiceCapture = useCallback(() => {
     if (scmoMediaRecorderRef.current?.state === "recording") {
@@ -897,23 +945,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     stopScmoVoiceStream();
     setScmoVoiceState("idle");
   }, [stopScmoVoiceStream]);
-
-  const insertScmoVoiceTranscriptPrompt = useCallback(() => {
-    const current = valueRef.current;
-    const nextValue = current.trim()
-      ? `${current}\n\n${SCMO_VOICE_INTAKE_PROMPT}`
-      : SCMO_VOICE_INTAKE_PROMPT;
-    valueRef.current = nextValue;
-    setValue(nextValue);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(nextValue.length, nextValue.length);
-      ta.style.height = "auto";
-      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-    });
-  }, []);
 
   const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
     if (attachedImages.length || !msg.startsWith("/") || !onBuiltinCommand) return false;
@@ -2053,18 +2084,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <span>
                       {scmoVoiceState === "requesting" && "Requesting microphone access"}
                       {scmoVoiceState === "recording" && "Recording company narrative"}
-                      {scmoVoiceState === "captured" && "Audio captured for Demo 4A"}
+                      {scmoVoiceState === "transcribing" && "Transcribing company narrative"}
+                      {scmoVoiceState === "captured" && "Audio captured"}
                       {scmoVoiceState === "error" && "Voice capture needs attention"}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
-                    {scmoVoiceState === "captured"
-                      ? "Transcript generation is Demo 4B. For now, review the clip and paste/edit the transcript before sending it to Simmi."
-                      : scmoVoiceError ?? "Recording stays local in the browser for this UI proof. No STT provider is called in Demo 4A."}
+                    {scmoVoiceState === "transcribing"
+                      ? "Audio is being sent to the configured OpenAI speech-to-text path. You can replay the captured clip while transcription runs."
+                      : scmoVoiceState === "captured"
+                        ? scmoVoiceError ?? "Audio is captured. Retry transcription or clear the recording."
+                        : scmoVoiceError ?? "Recording starts only after your click. Stop recording automatically starts transcription."}
                   </div>
                 </div>
-                {scmoVoiceState === "recording" && (
-                  <span style={{ flexShrink: 0, width: 9, height: 9, borderRadius: 99, background: "#ef4444", boxShadow: "0 0 0 4px rgba(239,68,68,0.16)" }} />
+                {(scmoVoiceState === "recording" || scmoVoiceState === "transcribing") && (
+                  <span style={{ flexShrink: 0, width: 9, height: 9, borderRadius: 99, background: scmoVoiceState === "recording" ? "#ef4444" : "var(--accent)", boxShadow: scmoVoiceState === "recording" ? "0 0 0 4px rgba(239,68,68,0.16)" : "0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent)" }} />
                 )}
               </div>
               {scmoVoicePreviewUrl && (
@@ -2073,10 +2107,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 </audio>
               )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {scmoVoiceState === "captured" && (
+                {scmoVoiceState === "captured" && scmoVoiceBlobRef.current && scmoVoiceMimeType && (
                   <button
                     type="button"
-                    onClick={insertScmoVoiceTranscriptPrompt}
+                    onClick={() => {
+                      if (scmoVoiceBlobRef.current && scmoVoiceMimeType) void transcribeScmoVoiceCapture(scmoVoiceBlobRef.current, scmoVoiceMimeType);
+                    }}
                     style={{
                       padding: "6px 10px",
                       border: "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))",
@@ -2088,7 +2124,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       fontWeight: 700,
                     }}
                   >
-                    Prepare transcript handoff
+                    Retry transcription
                   </button>
                 )}
                 {(scmoVoiceState === "captured" || scmoVoiceState === "error") && (
@@ -2281,9 +2317,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <button
                 type="button"
                 onClick={scmoVoiceState === "recording" ? stopScmoVoiceCapture : startScmoVoiceCapture}
-                disabled={isStreaming || scmoVoiceState === "requesting"}
-                title={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : "Record SCMO voice intake narrative"}
-                aria-label={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : "Record SCMO voice intake narrative"}
+                disabled={isStreaming || scmoVoiceState === "requesting" || scmoVoiceState === "transcribing"}
+                title={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : scmoVoiceState === "transcribing" ? "Transcribing SCMO voice intake narrative" : "Record SCMO voice intake narrative"}
+                aria-label={scmoVoiceState === "recording" ? "Stop SCMO voice capture" : scmoVoiceState === "transcribing" ? "Transcribing SCMO voice intake narrative" : "Record SCMO voice intake narrative"}
                 aria-pressed={scmoVoiceState === "recording"}
                 style={{
                   flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
@@ -2292,12 +2328,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   border: "none",
                   borderRadius: 9,
                   color: scmoVoiceState === "recording" ? "#ef4444" : scmoVoicePreviewUrl ? "var(--accent)" : "var(--text-muted)",
-                  cursor: isStreaming || scmoVoiceState === "requesting" ? "not-allowed" : "pointer",
-                  opacity: isStreaming || scmoVoiceState === "requesting" ? 0.55 : 1,
+                  cursor: isStreaming || scmoVoiceState === "requesting" || scmoVoiceState === "transcribing" ? "not-allowed" : "pointer",
+                  opacity: isStreaming || scmoVoiceState === "requesting" || scmoVoiceState === "transcribing" ? 0.55 : 1,
                   transition: "background 0.12s, color 0.12s, opacity 0.12s",
                 }}
                 onMouseEnter={(e) => {
-                  if (isStreaming || scmoVoiceState === "requesting") return;
+                  if (isStreaming || scmoVoiceState === "requesting" || scmoVoiceState === "transcribing") return;
                   e.currentTarget.style.background = scmoVoiceState === "recording" ? "rgba(239,68,68,0.16)" : "var(--bg-hover)";
                   e.currentTarget.style.color = scmoVoiceState === "recording" ? "#ef4444" : "var(--text)";
                 }}
