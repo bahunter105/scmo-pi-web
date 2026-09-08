@@ -41,6 +41,7 @@ Keep changes small and upstream-syncable:
 - Harness-owned Simmi system prompt in `lib/scmo-system-prompt.ts`.
 - Product-mode runtime defaults in `lib/scmo-runtime-defaults.ts`.
 - Codex/sandbox auth notes in `SCMO_AUTH.md`.
+- In-chat SCMO approval cards for proposed `marketing-context/` file changes.
 
 ## Explicit non-goals for Demo 3
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState, useRef, useEffect, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useMemo, type CSSProperties } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { ImagePreview } from "./ImagePreview";
 import { copyText } from "@/lib/clipboard";
@@ -12,6 +12,7 @@ import { isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionToCommand } from "@/lib/slash-display";
+import { encodeFilePathForApi, joinFilePath, normalizeFilePathSlashes } from "@/lib/file-paths";
 import type { SubagentToolDetails } from "@/lib/subagent-extension";
 import { isScmoProductMode } from "@/lib/scmo-product-mode";
 import type {
@@ -86,6 +87,52 @@ const thinkingContentCache = new Map<string, Promise<string>>();
 // KaTeX + syntax highlighting on multi-hundred-KB payloads (e.g. pasted HAR or
 // log dumps) freezes the browser main thread.
 const MAX_MARKDOWN_CHARS = 100_000;
+
+export type ScmoFileChangeRisk = "low" | "medium" | "high";
+
+export interface ScmoFileChangeProposal {
+  filePath: string;
+  summary: string;
+  risk: ScmoFileChangeRisk;
+  proposedContent: string;
+}
+
+const SCMO_FILE_CHANGE_FENCE = /```(?:scmo-file-change|scmo-proposed-file-change)\s*\n([\s\S]*?)\n```/g;
+
+function isScmoFileChangeRisk(value: unknown): value is ScmoFileChangeRisk {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function parseScmoFileChangeProposal(raw: string): ScmoFileChangeProposal | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  const filePath = typeof obj.filePath === "string" ? obj.filePath.trim() : "";
+  const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
+  const proposedContent = typeof obj.proposedContent === "string"
+    ? obj.proposedContent
+    : typeof obj.content === "string"
+      ? obj.content
+      : "";
+  const risk = isScmoFileChangeRisk(obj.risk) ? obj.risk : "medium";
+  if (!filePath || !summary || typeof proposedContent !== "string") return null;
+  return { filePath, summary, risk, proposedContent };
+}
+
+export function parseScmoFileChangeProposals(markdown: string): { markdown: string; proposals: ScmoFileChangeProposal[] } {
+  const proposals: ScmoFileChangeProposal[] = [];
+  const stripped = markdown.replace(SCMO_FILE_CHANGE_FENCE, (_match, jsonText: string) => {
+    const proposal = parseScmoFileChangeProposal(jsonText.trim());
+    if (proposal) proposals.push(proposal);
+    return proposal ? "" : _match;
+  }).replace(/\n{3,}/g, "\n\n").trim();
+  return { markdown: stripped, proposals };
+}
 
 function formatMessageBytes(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
@@ -868,7 +915,142 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
 }
 
 function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
-  return <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</SafeMarkdownBody>;
+  const { markdown, proposals } = useMemo(() => parseScmoFileChangeProposals(block.text), [block.text]);
+  return (
+    <>
+      {markdown && <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{markdown}</SafeMarkdownBody>}
+      {!isStreaming && proposals.map((proposal, index) => (
+        <ScmoFileChangeApprovalCard
+          key={`${proposal.filePath}-${index}`}
+          proposal={proposal}
+          cwd={cwd}
+          onOpenFile={onOpenFile}
+        />
+      ))}
+    </>
+  );
+}
+
+function resolveScmoProposalPath(filePath: string, cwd?: string): string {
+  const normalized = normalizeFilePathSlashes(filePath);
+  if (normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized)) return normalized;
+  return cwd ? joinFilePath(cwd, normalized) : normalized;
+}
+
+function getRiskColor(risk: ScmoFileChangeRisk): string {
+  if (risk === "low") return "#16a34a";
+  if (risk === "high") return "#ef4444";
+  return "#f59e0b";
+}
+
+function ScmoFileChangeApprovalCard({ proposal, cwd, onOpenFile }: { proposal: ScmoFileChangeProposal; cwd?: string; onOpenFile?: (filePath: string) => void }) {
+  const [status, setStatus] = useState<"pending" | "saving" | "approved" | "rejected" | "changes" | "other" | "error">("pending");
+  const [message, setMessage] = useState<string | null>(null);
+  const targetPath = resolveScmoProposalPath(proposal.filePath, cwd);
+  const riskColor = getRiskColor(proposal.risk);
+
+  const approve = async () => {
+    setStatus("saving");
+    setMessage("Saving approved file change…");
+    try {
+      const response = await fetch(`/api/files/${encodeFilePathForApi(targetPath)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: proposal.proposedContent }),
+      });
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? `Save failed (${response.status})`);
+      setStatus("approved");
+      setMessage("Approved and saved. Durable company context updated.");
+      onOpenFile?.(targetPath);
+    } catch (err) {
+      setStatus("error");
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const reject = () => {
+    setStatus("rejected");
+    setMessage("Rejected. No file was changed.");
+  };
+
+  const requestChanges = () => {
+    const prompt = `Please revise the proposed change for ${proposal.filePath}. Keep it as a review card and explain what changed.`;
+    void copyText(prompt);
+    setStatus("changes");
+    setMessage("Request-change prompt copied. Paste it into chat with your notes.");
+  };
+
+  const other = () => {
+    setStatus("other");
+    setMessage("Use the side-panel editor or reply in chat with the exact alternate action.");
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label="SCMO file change approval"
+      style={{
+        border: "1px solid color-mix(in srgb, var(--accent) 40%, var(--border))",
+        borderRadius: 10,
+        background: "color-mix(in srgb, var(--accent) 5%, var(--bg-panel))",
+        padding: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>
+          SCMO file change approval
+        </span>
+        <span style={{ marginLeft: "auto", color: riskColor, fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>
+          {proposal.risk} risk
+        </span>
+      </div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-muted)", overflowWrap: "anywhere" }}>
+        {proposal.filePath}
+      </div>
+      <div style={{ color: "var(--text)", fontSize: 13, lineHeight: 1.5 }}>
+        {proposal.summary}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" onClick={() => void approve()} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("primary")}>Approve</button>
+        <button type="button" onClick={reject} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("secondary")}>Reject</button>
+        <button type="button" onClick={requestChanges} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("secondary")}>Request changes</button>
+        <button type="button" onClick={other} disabled={status === "saving" || status === "approved" || status === "rejected"} style={approvalButtonStyle("ghost")}>Other</button>
+      </div>
+      {message && (
+        <div style={{ color: status === "error" ? "#ef4444" : "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
+          {message}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function approvalButtonStyle(kind: "primary" | "secondary" | "ghost"): CSSProperties {
+  if (kind === "primary") {
+    return {
+      border: "1px solid var(--accent)",
+      background: "var(--accent)",
+      color: "var(--bg)",
+      borderRadius: 6,
+      padding: "6px 10px",
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: "pointer",
+    };
+  }
+  return {
+    border: "1px solid var(--border)",
+    background: kind === "ghost" ? "transparent" : "var(--bg-panel)",
+    color: "var(--text)",
+    borderRadius: 6,
+    padding: "6px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+  };
 }
 
 function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {

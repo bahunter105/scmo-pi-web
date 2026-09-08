@@ -12,6 +12,7 @@ const {
   MessageView,
   getTokenEstimateText,
   getToolCallInputText,
+  parseScmoFileChangeProposals,
   replaceUserMessageText,
 } = await jiti.import("./MessageView.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -201,4 +202,43 @@ test("renders custom-message images as buttons that open a larger preview", () =
 
   assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
   assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
+});
+
+test("parses SCMO proposed file change blocks out of assistant markdown", () => {
+  const text = `I recommend this update.
+
+\`\`\`scmo-file-change
+{"filePath":"marketing-context/customer-truth/positioning.md","summary":"Add customer truth","risk":"low","proposedContent":"# Positioning\\n\\nApproved."}
+\`\`\`
+
+Review it.`;
+
+  const parsed = parseScmoFileChangeProposals(text);
+  assert.equal(parsed.proposals.length, 1);
+  assert.equal(parsed.proposals[0].filePath, "marketing-context/customer-truth/positioning.md");
+  assert.equal(parsed.proposals[0].summary, "Add customer truth");
+  assert.equal(parsed.proposals[0].risk, "low");
+  assert.equal(parsed.proposals[0].proposedContent, "# Positioning\n\nApproved.");
+  assert.doesNotMatch(parsed.markdown, /scmo-file-change/);
+});
+
+test("renders SCMO proposed file changes as approval cards", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{
+      type: "text",
+      text: `Proposed update:\n\n\`\`\`scmo-file-change\n{"filePath":"marketing-context/customer-truth/positioning.md","summary":"Add customer truth","risk":"low","proposedContent":"# Positioning"}\n\`\`\``,
+    }],
+  }, { cwd: "/workspace/company", onOpenFile() {} });
+
+  assert.match(html, /SCMO file change approval/);
+  assert.match(html, /marketing-context\/customer-truth\/positioning\.md/);
+  assert.match(html, /Add customer truth/);
+  assert.match(html, />Approve</);
+  assert.match(html, />Reject</);
+  assert.match(html, /Request changes/);
+  assert.match(html, />Other</);
+  assert.doesNotMatch(html, /scmo-file-change/);
 });
